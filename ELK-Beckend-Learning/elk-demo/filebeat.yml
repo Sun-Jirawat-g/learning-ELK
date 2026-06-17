@@ -1,0 +1,20 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /logs/*.log
+    json.keys_under_root: true
+    json.overwrite_keys: true
+
+output.elasticsearch:
+  hosts: ["https://elasticsearch:9200"]
+  username: "elastic"
+  password: "changeme"
+  index: "demo-logs-%{+yyyy.MM.dd}"
+  ssl:
+    certificate_authorities: ["/certs/ca/ca.crt"]
+    verification_mode: certificate
+
+setup.ilm.enabled: true
+setup.template.name: "demo-logs"
+setup.template.pattern: "demo-logs-*"

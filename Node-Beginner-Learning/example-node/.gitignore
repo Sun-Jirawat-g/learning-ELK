@@ -1,0 +1,74 @@
+# ---------- Dependencies ----------
+node_modules/
+.pnp/
+.pnp.js
+.yarn/
+jspm_packages/
+
+# ---------- Build output ----------
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# ---------- Env / secrets ----------
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+*.pem
+*.key
+
+# ---------- Logs ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------- Coverage / tests ----------
+coverage/
+*.lcov
+.nyc_output/
+.jest-cache/
+
+# ---------- Cache ----------
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.npm/
+.yarn-cache/
+.turbo/
+
+# ---------- Prisma ----------
+# generated client lives in node_modules, but ignore local sqlite + migration drafts
+*.sqlite
+*.sqlite-journal
+prisma/migrations/dev.db*
+
+# ---------- IDE / Editor ----------
+.vscode/
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---------- Misc ----------
+tmp/
+temp/
+.history/
+*.bak

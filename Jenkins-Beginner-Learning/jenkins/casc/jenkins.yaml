@@ -1,0 +1,38 @@
+# Jenkins Configuration as Code (JCasC) — optional Module 7 exercise.
+# Drop this file into /var/jenkins_home/casc.yaml and install "configuration-as-code" plugin.
+# Reload via Manage Jenkins -> Configuration as Code -> Reload.
+
+jenkins:
+  systemMessage: "Jenkins managed by JCasC"
+  numExecutors: 2
+  mode: NORMAL
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: "${ADMIN_PASSWORD:-changeme}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: github-creds
+              username: "${GITHUB_USER}"
+              password: "${GITHUB_TOKEN}"
+              description: "GitHub PAT"
+          - usernamePassword:
+              scope: GLOBAL
+              id: registry-creds
+              username: "${REGISTRY_USER}"
+              password: "${REGISTRY_TOKEN}"
+              description: "Docker registry"
+
+unclassified:
+  location:
+    url: http://localhost:8080/

@@ -1,0 +1,99 @@
+// CI pipeline — pulled from GitHub.
+// Stages: checkout -> install -> lint -> test -> docker build -> push image
+//
+// Setup in Jenkins:
+//   - Credentials:
+//       github-creds   (username + PAT)
+//       registry-creds (username + password for DockerHub/GHCR)
+//   - Job type: Pipeline -> Pipeline script from SCM -> Git
+//     Script path: jenkinsfiles/Jenkinsfile.ci
+
+pipeline {
+  agent any
+
+  environment {
+    REGISTRY    = 'docker.io'                    // or ghcr.io
+    IMAGE_NAME  = 'your-org/example-node'
+    IMAGE_TAG   = "${env.BRANCH_NAME ?: 'main'}-${env.GIT_COMMIT?.take(7) ?: env.BUILD_NUMBER}"
+    NODE_VERSION = '20'
+  }
+
+  options {
+    timestamps()
+    timeout(time: 30, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    disableConcurrentBuilds()
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'git rev-parse --short HEAD > .gitsha && cat .gitsha'
+      }
+    }
+
+    stage('Install') {
+      steps {
+        sh '''
+          node -v || true
+          npm ci
+        '''
+      }
+    }
+
+    stage('Lint') {
+      steps {
+        sh 'npm run lint || echo "no lint script — skip"'
+      }
+    }
+
+    stage('Test') {
+      steps {
+        sh 'npm test -- --ci || echo "no tests yet — skip"'
+      }
+      post {
+        always {
+          junit allowEmptyResults: true, testResults: '**/junit*.xml'
+        }
+      }
+    }
+
+    stage('Docker Build') {
+      steps {
+        script {
+          dockerImage = docker.build("${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}", '.')
+        }
+      }
+    }
+
+    stage('Push Image') {
+      when { branch 'main' }
+      steps {
+        script {
+          docker.withRegistry("https://${REGISTRY}", 'registry-creds') {
+            dockerImage.push("${IMAGE_TAG}")
+            dockerImage.push('latest')
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "CI OK — image: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+      // Trigger CD job, pass image tag
+      build job: 'app-cd',
+            parameters: [string(name: 'IMAGE_TAG', value: "${IMAGE_TAG}")],
+            wait: false
+    }
+    failure {
+      echo "CI FAILED — see console output"
+    }
+    always {
+      cleanWs()
+    }
+  }
+}

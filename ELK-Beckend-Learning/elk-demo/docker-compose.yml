@@ -1,0 +1,113 @@
+services:
+  # ----------------------------------------------------------------------
+  # STAGE 1: สร้าง CA + certificate ให้ Elasticsearch node
+  # รันครั้งเดียวตอน first-start เท่านั้น (เช็คว่ามี cert อยู่แล้วหรือยัง)
+  # ----------------------------------------------------------------------
+  cert-setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: cert-setup
+    volumes:
+      - ./certs:/certs
+    user: "0"
+    command: >
+      bash -c '
+        set -e &&
+        if [ ! -f /certs/ca/ca.crt ]; then
+          echo "Generating CA..." &&
+          rm -f /certs/ca.zip &&
+          bin/elasticsearch-certutil ca --silent --pem --out /certs/ca.zip &&
+          unzip -o /certs/ca.zip -d /certs &&
+          echo "CA generated."
+        else
+          echo "CA already exists, skipping CA generation."
+        fi &&
+        if [ ! -f /certs/elasticsearch/elasticsearch.crt ]; then
+          echo "Generating node certificate signed by CA..." &&
+          rm -f /certs/certs.zip &&
+          bin/elasticsearch-certutil cert --silent --pem \
+            --ca-cert /certs/ca/ca.crt --ca-key /certs/ca/ca.key \
+            --in /certs/instances.yml --out /certs/certs.zip &&
+          unzip -o /certs/certs.zip -d /certs &&
+          echo "Node certificate generated."
+        else
+          echo "Node certificate already exists, skipping."
+        fi &&
+        chmod -R 644 /certs/ca/ca.crt /certs/elasticsearch/elasticsearch.crt /certs/elasticsearch/elasticsearch.key &&
+        echo "Done. Certs ready."
+      '
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    depends_on:
+      cert-setup:
+        condition: service_completed_successfully
+    environment:
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=changeme
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=/certs/elasticsearch/elasticsearch.key
+      - xpack.security.http.ssl.certificate=/certs/elasticsearch/elasticsearch.crt
+      - xpack.security.http.ssl.certificate_authorities=/certs/ca/ca.crt
+      - xpack.security.http.ssl.verification_mode=certificate
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=/certs/elasticsearch/elasticsearch.key
+      - xpack.security.transport.ssl.certificate=/certs/elasticsearch/elasticsearch.crt
+      - xpack.security.transport.ssl.certificate_authorities=/certs/ca/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s --cacert /certs/ca/ca.crt -u elastic:changeme https://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  # ตั้ง password ของ kibana_system ผ่าน HTTPS (ต้องชี้ CA cert ด้วย --cacert)
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+    command: >
+      curl -s --cacert /certs/ca/ca.crt -X POST -u elastic:changeme
+      -H "Content-Type: application/json"
+      https://elasticsearch:9200/_security/user/kibana_system/_password
+      -d "{\"password\":\"changeme\"}"
+    restart: "no"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=changeme
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/certs/ca/ca.crt
+      - ELASTICSEARCH_SSL_VERIFICATIONMODE=certificate
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "5601:5601"
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.12.0
+    container_name: filebeat-1
+    user: root
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./logs:/logs:ro
+      - ./certs:/certs:ro
+
+volumes:
+  es_data:

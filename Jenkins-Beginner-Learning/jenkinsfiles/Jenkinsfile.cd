@@ -1,0 +1,125 @@
+// CD pipeline — deploy image produced by CI to dev -> staging -> prod (with approval).
+// Triggered by CI job (app-ci) OR manually with IMAGE_TAG.
+//
+// Setup in Jenkins:
+//   - Credentials:
+//       registry-creds   (pull from registry)
+//       ssh-prod         (SSH key for prod host) — or kubeconfig-prod for K8s
+//   - Job type: Pipeline -> Pipeline script from SCM
+//     Script path: jenkinsfiles/Jenkinsfile.cd
+
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'image tag to deploy')
+    choice(name: 'TARGET',    choices: ['dev', 'staging', 'prod', 'all'], description: 'target env')
+  }
+
+  environment {
+    REGISTRY   = 'docker.io'
+    IMAGE_NAME = 'your-org/example-node'
+    IMAGE_FULL = "${REGISTRY}/${IMAGE_NAME}:${params.IMAGE_TAG}"
+  }
+
+  options {
+    timestamps()
+    timeout(time: 1, unit: 'HOURS')
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+  }
+
+  stages {
+
+    stage('Verify Image') {
+      steps {
+        script {
+          docker.withRegistry("https://${REGISTRY}", 'registry-creds') {
+            sh "docker pull ${IMAGE_FULL}"
+          }
+        }
+      }
+    }
+
+    stage('Deploy: DEV') {
+      when { anyOf { expression { params.TARGET == 'dev' }; expression { params.TARGET == 'all' } } }
+      steps {
+        sshagent(credentials: ['ssh-prod']) {
+          sh """
+            ssh -o StrictHostKeyChecking=no deploy@dev.example.com '
+              docker pull ${IMAGE_FULL} &&
+              docker compose -f /opt/app/docker-compose.yaml up -d
+            '
+          """
+        }
+      }
+    }
+
+    stage('Smoke Test: DEV') {
+      when { anyOf { expression { params.TARGET == 'dev' }; expression { params.TARGET == 'all' } } }
+      steps {
+        sh 'curl -fsS https://dev.example.com/api/v1/health'
+      }
+    }
+
+    stage('Deploy: STAGING') {
+      when { anyOf { expression { params.TARGET == 'staging' }; expression { params.TARGET == 'all' } } }
+      steps {
+        sshagent(credentials: ['ssh-prod']) {
+          sh """
+            ssh -o StrictHostKeyChecking=no deploy@staging.example.com '
+              docker pull ${IMAGE_FULL} &&
+              docker compose -f /opt/app/docker-compose.yaml up -d
+            '
+          """
+        }
+      }
+    }
+
+    stage('Integration Test: STAGING') {
+      when { anyOf { expression { params.TARGET == 'staging' }; expression { params.TARGET == 'all' } } }
+      steps {
+        sh 'curl -fsS https://staging.example.com/api/v1/health'
+        // run integration suite here
+      }
+    }
+
+    stage('Approval Gate (PROD)') {
+      when { anyOf { expression { params.TARGET == 'prod' }; expression { params.TARGET == 'all' } } }
+      steps {
+        timeout(time: 30, unit: 'MINUTES') {
+          input message: "Deploy ${IMAGE_FULL} to PROD?", ok: 'Deploy'
+        }
+      }
+    }
+
+    stage('Deploy: PROD') {
+      when { anyOf { expression { params.TARGET == 'prod' }; expression { params.TARGET == 'all' } } }
+      steps {
+        sshagent(credentials: ['ssh-prod']) {
+          sh """
+            ssh -o StrictHostKeyChecking=no deploy@prod.example.com '
+              docker pull ${IMAGE_FULL} &&
+              docker tag ${IMAGE_FULL} app:previous || true &&
+              docker compose -f /opt/app/docker-compose.yaml up -d
+            '
+          """
+        }
+      }
+    }
+
+    stage('Post-deploy Health Check') {
+      when { anyOf { expression { params.TARGET == 'prod' }; expression { params.TARGET == 'all' } } }
+      steps {
+        sh 'curl -fsS https://example.com/api/v1/health'
+      }
+    }
+  }
+
+  post {
+    success { echo "CD OK — deployed ${IMAGE_FULL}" }
+    failure {
+      echo "CD FAILED — consider rollback"
+      // Hook rollback step here if desired
+    }
+  }
+}
